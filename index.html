@@ -8,6 +8,11 @@
     content="width=device-width, initial-scale=1.0"
   >
 
+  <meta
+    name="theme-color"
+    content="#111827"
+  >
+
   <title>CALL APP</title>
 
   <style>
@@ -109,6 +114,11 @@
 
     button:hover {
       opacity: 0.9;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
 
     button.danger {
@@ -239,141 +249,335 @@
   </main>
 
   <script>
-    const localVideo = document.getElementById("localVideo");
-    const remoteVideo = document.getElementById("remoteVideo");
-    const statusEl = document.getElementById("status");
+    const localVideo =
+      document.getElementById("localVideo");
 
-    const roomInput = document.getElementById("roomInput");
+    const remoteVideo =
+      document.getElementById("remoteVideo");
 
-    const joinBtn = document.getElementById("joinBtn");
-    const cameraBtn = document.getElementById("cameraBtn");
-    const micBtn = document.getElementById("micBtn");
-    const leaveBtn = document.getElementById("leaveBtn");
+    const statusEl =
+      document.getElementById("status");
+
+    const roomInput =
+      document.getElementById("roomInput");
+
+    const joinBtn =
+      document.getElementById("joinBtn");
+
+    const cameraBtn =
+      document.getElementById("cameraBtn");
+
+    const micBtn =
+      document.getElementById("micBtn");
+
+    const leaveBtn =
+      document.getElementById("leaveBtn");
+
 
     let localStream = null;
+
     let peerConnection = null;
+
     let socket = null;
 
     let clientId = null;
+
     let remoteClientId = null;
 
     let pendingCandidates = [];
 
+    let isJoined = false;
+
+    let isMakingOffer = false;
+
+
     const rtcConfig = {
+
       iceServers: [
+
         {
           urls: "stun:stun.l.google.com:19302"
         },
+
         {
           urls: "stun:stun1.l.google.com:19302"
+        },
+
+        {
+          urls: "stun:stun2.l.google.com:19302"
         }
+
       ]
+
     };
 
+
     function setStatus(message) {
+
       statusEl.textContent = message;
-      console.log("[CALL APP]", message);
+
+      console.log(
+        "[CALL APP]",
+        message
+      );
+
     }
 
-function getWebSocketUrl(room) {
-  const protocol =
-    location.protocol === "https:" ? "wss:" : "ws:";
 
-return `${protocol}//${location.host}/ws?room=${encodeURIComponent(room)}`;}      const protocol =
+    function getWebSocketUrl(room) {
+
+      const protocol =
         location.protocol === "https:"
           ? "wss:"
           : "ws:";
 
-      return `${protocol}//${location.host}/ws?room=${encodeURIComponent(room)}`;
+      return (
+        `${protocol}//${location.host}/ws` +
+        `?room=${encodeURIComponent(room)}`
+      );
+
     }
 
+
     async function startMedia() {
+
       if (localStream) {
+
         return localStream;
+
       }
 
+
+      if (
+        !navigator.mediaDevices ||
+        !navigator.mediaDevices.getUserMedia
+      ) {
+
+        setStatus(
+          "Camera and microphone are not supported"
+        );
+
+        throw new Error(
+          "getUserMedia is not supported"
+        );
+
+      }
+
+
       try {
+
         localStream =
           await navigator.mediaDevices.getUserMedia({
-            video: true,
+
+            video: {
+              facingMode: "user"
+            },
+
             audio: true
+
           });
 
-        localVideo.srcObject = localStream;
 
-        setStatus("Camera and microphone ready");
+        localVideo.srcObject =
+          localStream;
+
+
+        await localVideo.play().catch(() => {});
+
+
+        setStatus(
+          "Camera and microphone ready"
+        );
+
 
         return localStream;
 
+
       } catch (error) {
-        console.error(error);
+
+        console.error(
+          "Media error:",
+          error
+        );
+
 
         setStatus(
           "Camera/microphone permission is required"
         );
 
+
         throw error;
+
       }
+
     }
+
 
     function createPeerConnection() {
 
       if (peerConnection) {
-        peerConnection.close();
+
+        try {
+          peerConnection.close();
+        } catch {}
+
       }
 
+
       peerConnection =
-        new RTCPeerConnection(rtcConfig);
+        new RTCPeerConnection(
+          rtcConfig
+        );
+
 
       if (localStream) {
-        for (const track of localStream.getTracks()) {
+
+        for (
+          const track
+          of localStream.getTracks()
+        ) {
+
           peerConnection.addTrack(
             track,
             localStream
           );
+
         }
+
       }
 
-      peerConnection.ontrack = (event) => {
 
-        if (event.streams && event.streams[0]) {
-          remoteVideo.srcObject =
-            event.streams[0];
-        }
-      };
+      peerConnection.ontrack =
+        async (event) => {
+
+          console.log(
+            "[WEBRTC] Remote track received"
+          );
+
+
+          if (
+            event.streams &&
+            event.streams[0]
+          ) {
+
+            remoteVideo.srcObject =
+              event.streams[0];
+
+            await remoteVideo
+              .play()
+              .catch(() => {});
+
+          }
+
+        };
+
 
       peerConnection.onicecandidate =
         (event) => {
 
           if (!event.candidate) {
+
             return;
+
           }
 
+
           sendSignal({
+
             type: "ice",
+
             candidate: event.candidate
+
           });
+
         };
+
 
       peerConnection.onconnectionstatechange =
         () => {
 
+          if (!peerConnection) {
+
+            return;
+
+          }
+
+
           const state =
             peerConnection.connectionState;
 
-          setStatus(
-            `Connection: ${state}`
+
+          console.log(
+            "[WEBRTC] Connection state:",
+            state
           );
 
-          if (state === "failed") {
+
+          if (state === "connected") {
+
+            setStatus(
+              "Connected"
+            );
+
+          }
+
+          else if (state === "connecting") {
+
+            setStatus(
+              "Connecting..."
+            );
+
+          }
+
+          else if (state === "disconnected") {
+
+            setStatus(
+              "Connection interrupted"
+            );
+
+          }
+
+          else if (state === "failed") {
+
             setStatus(
               "Connection failed"
             );
+
           }
+
+          else if (state === "closed") {
+
+            setStatus(
+              "Call ended"
+            );
+
+          }
+
         };
 
+
+      peerConnection.oniceconnectionstatechange =
+        () => {
+
+          if (!peerConnection) {
+
+            return;
+
+          }
+
+
+          console.log(
+            "[WEBRTC] ICE:",
+            peerConnection.iceConnectionState
+          );
+
+        };
+
+
       return peerConnection;
+
     }
+
 
     function sendSignal(data) {
 
@@ -381,262 +585,587 @@ return `${protocol}//${location.host}/ws?room=${encodeURIComponent(room)}`;}    
         !socket ||
         socket.readyState !== WebSocket.OPEN
       ) {
+
+        console.warn(
+          "[SIGNAL] WebSocket is not open"
+        );
+
         return;
+
       }
 
+
+      if (!remoteClientId) {
+
+        console.warn(
+          "[SIGNAL] No remote client"
+        );
+
+        return;
+
+      }
+
+
       socket.send(
+
         JSON.stringify({
+
           type: "signal",
+
           target: remoteClientId,
-          data
+
+          data: data
+
         })
+
       );
+
     }
+
 
     async function makeOffer() {
 
       if (!remoteClientId) {
+
         return;
+
       }
 
-      const pc =
-        peerConnection ||
-        createPeerConnection();
 
-      const offer =
-        await pc.createOffer();
+      if (isMakingOffer) {
 
-      await pc.setLocalDescription(offer);
+        return;
 
-      sendSignal({
-        type: "offer",
-        offer
-      });
-    }
-
-    async function handleSignal(data) {
-
-      if (!peerConnection) {
-        createPeerConnection();
       }
 
-      const pc = peerConnection;
 
-      if (data.type === "offer") {
+      isMakingOffer = true;
 
-        remoteClientId =
-          data.from || remoteClientId;
 
-        await pc.setRemoteDescription(
-          new RTCSessionDescription(
-            data.offer
-          )
+      try {
+
+        const pc =
+          peerConnection ||
+          createPeerConnection();
+
+
+        const offer =
+          await pc.createOffer();
+
+
+        await pc.setLocalDescription(
+          offer
         );
 
-        for (const candidate of pendingCandidates) {
-          await pc.addIceCandidate(
-            candidate
-          );
-        }
-
-        pendingCandidates = [];
-
-        const answer =
-          await pc.createAnswer();
-
-        await pc.setLocalDescription(answer);
 
         sendSignal({
-          type: "answer",
-          answer
+
+          type: "offer",
+
+          offer: pc.localDescription
+
         });
 
-        return;
-      }
 
-      if (data.type === "answer") {
-
-        await pc.setRemoteDescription(
-          new RTCSessionDescription(
-            data.answer
-          )
+        setStatus(
+          "Calling..."
         );
 
-        for (const candidate of pendingCandidates) {
-          await pc.addIceCandidate(
-            candidate
-          );
-        }
 
-        pendingCandidates = [];
+      } catch (error) {
 
-        return;
+        console.error(
+          "Offer error:",
+          error
+        );
+
+      } finally {
+
+        isMakingOffer = false;
+
       }
 
-      if (data.type === "ice") {
-
-        const candidate =
-          new RTCIceCandidate(
-            data.candidate
-          );
-
-        if (
-          pc.remoteDescription &&
-          pc.remoteDescription.type
-        ) {
-          await pc.addIceCandidate(
-            candidate
-          );
-        } else {
-          pendingCandidates.push(
-            candidate
-          );
-        }
-      }
     }
 
+
+    async function handleSignal(
+      message
+    ) {
+
+      const data =
+        message.data;
+
+
+      if (!data) {
+
+        return;
+
+      }
+
+
+      if (!peerConnection) {
+
+        createPeerConnection();
+
+      }
+
+
+      const pc =
+        peerConnection;
+
+
+      try {
+
+        if (data.type === "offer") {
+
+          remoteClientId =
+            message.from;
+
+
+          await pc.setRemoteDescription(
+
+            new RTCSessionDescription(
+              data.offer
+            )
+
+          );
+
+
+          for (
+            const candidate
+            of pendingCandidates
+          ) {
+
+            await pc.addIceCandidate(
+              candidate
+            );
+
+          }
+
+
+          pendingCandidates = [];
+
+
+          const answer =
+            await pc.createAnswer();
+
+
+          await pc.setLocalDescription(
+            answer
+          );
+
+
+          sendSignal({
+
+            type: "answer",
+
+            answer: pc.localDescription
+
+          });
+
+
+          setStatus(
+            "Answer sent"
+          );
+
+
+          return;
+
+        }
+
+
+        if (data.type === "answer") {
+
+          await pc.setRemoteDescription(
+
+            new RTCSessionDescription(
+              data.answer
+            )
+
+          );
+
+
+          for (
+            const candidate
+            of pendingCandidates
+          ) {
+
+            await pc.addIceCandidate(
+              candidate
+            );
+
+          }
+
+
+          pendingCandidates = [];
+
+
+          setStatus(
+            "Connecting..."
+          );
+
+
+          return;
+
+        }
+
+
+        if (data.type === "ice") {
+
+          const candidate =
+            new RTCIceCandidate(
+              data.candidate
+            );
+
+
+          if (
+            pc.remoteDescription &&
+            pc.remoteDescription.type
+          ) {
+
+            await pc.addIceCandidate(
+              candidate
+            );
+
+          } else {
+
+            pendingCandidates.push(
+              candidate
+            );
+
+          }
+
+
+          return;
+
+        }
+
+      } catch (error) {
+
+        console.error(
+          "Signal handling error:",
+          error
+        );
+
+        setStatus(
+          "WebRTC signaling error"
+        );
+
+      }
+
+    }
+
+
     async function connectSocket() {
+
+      if (
+        socket &&
+        socket.readyState === WebSocket.OPEN
+      ) {
+
+        setStatus(
+          "Already connected"
+        );
+
+        return;
+
+      }
+
 
       const room =
         roomInput.value.trim() ||
         "family";
 
+
+      if (
+        !/^[a-zA-Z0-9_-]{1,50}$/.test(
+          room
+        )
+      ) {
+
+        setStatus(
+          "Invalid room name"
+        );
+
+        return;
+
+      }
+
+
       await startMedia();
+
 
       const wsUrl =
         getWebSocketUrl(room);
 
-      setStatus("Connecting...");
+
+      console.log(
+        "[SIGNAL] Connecting to:",
+        wsUrl
+      );
+
+
+      setStatus(
+        "Connecting to signal server..."
+      );
+
 
       socket =
         new WebSocket(wsUrl);
 
-      socket.onopen = () => {
 
-        setStatus("Connected to signal server");
-
-        socket.send(
-          JSON.stringify({
-            type: "join"
-          })
-        );
-      };
-
-      socket.onmessage = async (event) => {
-
-        try {
-
-          const message =
-            JSON.parse(event.data);
+      socket.onopen =
+        () => {
 
           console.log(
-            "[SIGNAL]",
-            message
+            "[SIGNAL] WebSocket connected"
           );
 
-          if (message.type === "connected") {
 
-            clientId =
-              message.clientId;
+          setStatus(
+            "Connected to signal server"
+          );
 
-            return;
-          }
 
-          if (message.type === "room_joined") {
+          socket.send(
 
-            setStatus(
-              `Joined room • ${message.users} other user(s)`
+            JSON.stringify({
+
+              type: "join"
+
+            })
+
+          );
+
+        };
+
+
+      socket.onmessage =
+        async (event) => {
+
+          try {
+
+            const message =
+              JSON.parse(
+                event.data
+              );
+
+
+            console.log(
+              "[SIGNAL]",
+              message
             );
 
-            if (message.users > 0) {
 
-              createPeerConnection();
+            if (
+              message.type ===
+              "connected"
+            ) {
+
+              clientId =
+                message.clientId;
+
+
+              return;
+
+            }
+
+
+            if (
+              message.type ===
+              "room_joined"
+            ) {
+
+              isJoined = true;
+
+
+              setStatus(
+
+                message.users > 0
+
+                  ? "Other person found"
+
+                  : "Waiting for other person..."
+
+              );
+
+
+              if (
+                message.users > 0
+              ) {
+
+                const users =
+                  message.users;
+
+
+                if (!remoteClientId) {
+
+                  console.log(
+                    "[SIGNAL] Waiting for peer_joined..."
+                  );
+
+                }
+
+              }
+
+
+              return;
+
+            }
+
+
+            if (
+              message.type ===
+              "peer_joined"
+            ) {
+
+              remoteClientId =
+                message.clientId;
+
+
+              console.log(
+                "[SIGNAL] Peer joined:",
+                remoteClientId
+              );
+
+
+              setStatus(
+                "Other person joined"
+              );
+
+
+              if (!peerConnection) {
+
+                createPeerConnection();
+
+              }
+
 
               await makeOffer();
+
+
+              return;
+
             }
 
-            return;
-          }
 
-          if (message.type === "peer_joined") {
+            if (
+              message.type ===
+              "signal"
+            ) {
 
-            remoteClientId =
-              message.clientId;
+              remoteClientId =
+                message.from;
 
-            setStatus(
-              "Another person joined"
-            );
 
-            if (!peerConnection) {
-              createPeerConnection();
+              await handleSignal(
+                message
+              );
+
+
+              return;
+
             }
 
-            return;
-          }
 
-          if (message.type === "signal") {
+            if (
+              message.type ===
+              "peer_left"
+            ) {
 
-            remoteClientId =
-              message.from;
+              remoteClientId = null;
 
-            await handleSignal({
-              ...message.data,
-              from: message.from
-            });
 
-            return;
-          }
+              remoteVideo.srcObject =
+                null;
 
-          if (message.type === "peer_left") {
 
-            remoteClientId = null;
+              pendingCandidates = [];
 
-            remoteVideo.srcObject = null;
 
-            if (peerConnection) {
-              peerConnection.close();
-              peerConnection = null;
+              if (peerConnection) {
+
+                try {
+                  peerConnection.close();
+                } catch {}
+
+                peerConnection = null;
+
+              }
+
+
+              setStatus(
+                "The other person left"
+              );
+
+
+              return;
+
             }
 
-            setStatus(
-              "The other person left"
+
+            if (
+              message.type ===
+              "error"
+            ) {
+
+              setStatus(
+                message.message
+              );
+
+            }
+
+          } catch (error) {
+
+            console.error(
+              "Message handling error:",
+              error
             );
 
-            return;
           }
 
-          if (message.type === "error") {
+        };
 
-            setStatus(
-              message.message
-            );
-          }
 
-        } catch (error) {
+      socket.onerror =
+        (error) => {
 
           console.error(
-            "Message handling error:",
+            "[SIGNAL] WebSocket error:",
             error
           );
-        }
-      };
 
-      socket.onerror = (error) => {
 
-        console.error(error);
+          setStatus(
+            "WebSocket connection error"
+          );
 
-        setStatus(
-          "WebSocket connection error"
-        );
-      };
+        };
 
-      socket.onclose = () => {
 
-        setStatus(
-          "Disconnected from signal server"
-        );
-      };
+      socket.onclose =
+        (event) => {
+
+          console.log(
+            "[SIGNAL] WebSocket closed:",
+            event.code,
+            event.reason
+          );
+
+
+          isJoined = false;
+
+          remoteClientId = null;
+
+
+          setStatus(
+            "Disconnected from signal server"
+          );
+
+        };
+
     }
+
 
     function leaveCall() {
 
@@ -645,98 +1174,201 @@ return `${protocol}//${location.host}/ws?room=${encodeURIComponent(room)}`;}    
         try {
 
           socket.send(
+
             JSON.stringify({
+
               type: "leave"
+
             })
+
           );
 
         } catch {}
+
+        try {
+
+          socket.close();
+
+        } catch {}
+
       }
+
+
+      socket = null;
+
 
       if (peerConnection) {
-        peerConnection.close();
+
+        try {
+
+          peerConnection.close();
+
+        } catch {}
+
         peerConnection = null;
+
       }
 
-      remoteVideo.srcObject = null;
+
+      remoteVideo.srcObject =
+        null;
+
 
       remoteClientId = null;
 
-      setStatus("Left the call");
+      pendingCandidates = [];
+
+      isJoined = false;
+
+
+      setStatus(
+        "Left the call"
+      );
+
     }
+
 
     cameraBtn.addEventListener(
       "click",
       async () => {
 
         if (!localStream) {
-          return;
+
+          try {
+
+            await startMedia();
+
+          } catch {
+
+            return;
+
+          }
+
         }
+
 
         const track =
           localStream.getVideoTracks()[0];
 
-        if (track) {
-          track.enabled =
-            !track.enabled;
 
-          cameraBtn.textContent =
-            track.enabled
-              ? "Camera"
-              : "Camera Off";
+        if (!track) {
+
+          return;
+
         }
+
+
+        track.enabled =
+          !track.enabled;
+
+
+        cameraBtn.textContent =
+          track.enabled
+            ? "Camera"
+            : "Camera Off";
+
       }
     );
+
 
     micBtn.addEventListener(
       "click",
       async () => {
 
         if (!localStream) {
-          return;
+
+          try {
+
+            await startMedia();
+
+          } catch {
+
+            return;
+
+          }
+
         }
+
 
         const track =
           localStream.getAudioTracks()[0];
 
-        if (track) {
-          track.enabled =
-            !track.enabled;
 
-          micBtn.textContent =
-            track.enabled
-              ? "Microphone"
-              : "Microphone Off";
+        if (!track) {
+
+          return;
+
         }
+
+
+        track.enabled =
+          !track.enabled;
+
+
+        micBtn.textContent =
+          track.enabled
+            ? "Microphone"
+            : "Microphone Off";
+
       }
     );
+
 
     joinBtn.addEventListener(
       "click",
       async () => {
 
+        joinBtn.disabled = true;
+
+
         try {
+
           await connectSocket();
+
         } catch (error) {
-          console.error(error);
+
+          console.error(
+            "Join error:",
+            error
+          );
+
+          setStatus(
+            "Unable to join the call"
+          );
+
+          joinBtn.disabled = false;
+
         }
+
       }
     );
 
+
     leaveBtn.addEventListener(
       "click",
-      leaveCall
+      () => {
+
+        leaveCall();
+
+        joinBtn.disabled = false;
+
+      }
     );
+
 
     window.addEventListener(
       "beforeunload",
       () => {
 
         try {
+
           socket?.close();
+
         } catch {}
+
       }
     );
+
   </script>
 
 </body>
