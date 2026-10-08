@@ -279,8 +279,7 @@ function getWebSocketUrl(room) {
   const protocol =
     location.protocol === "https:" ? "wss:" : "ws:";
 
-  return `${protocol}//${location.host}/?room=${encodeURIComponent(room)}`;
-}      const protocol =
+return `${protocol}//${location.host}/ws?room=${encodeURIComponent(room)}`;}      const protocol =
         location.protocol === "https:"
           ? "wss:"
           : "ws:";
