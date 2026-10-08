@@ -1,7 +1,6 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
-const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
@@ -13,6 +12,7 @@ const rooms = new Map();
 // Serve CALL APP frontend
 app.use(express.static(__dirname));
 
+// Health check
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -21,7 +21,28 @@ app.get("/health", (req, res) => {
   });
 });
 
-// WebSocket room management
+// TURN configuration for the frontend
+app.get("/turn-config", (req, res) => {
+  res.json({
+    iceServers: [
+      {
+        urls: "stun:stun.relay.metered.ca:80"
+      },
+      {
+        urls: [
+          "turn:global.relay.metered.ca:80",
+          "turn:global.relay.metered.ca:80?transport=tcp",
+          "turn:global.relay.metered.ca:443",
+          "turns:global.relay.metered.ca:443?transport=tcp"
+        ],
+        username: process.env.TURN_USERNAME,
+        credential: process.env.TURN_CREDENTIAL
+      }
+    ]
+  });
+});
+
+// Get or create room
 function getRoom(roomName) {
   if (!rooms.has(roomName)) {
     rooms.set(roomName, new Set());
@@ -30,12 +51,14 @@ function getRoom(roomName) {
   return rooms.get(roomName);
 }
 
+// Send JSON message
 function send(ws, data) {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data));
   }
 }
 
+// WebSocket connection
 wss.on("connection", (ws, request) => {
   const url = new URL(
     request.url,
@@ -84,9 +107,11 @@ wss.on("connection", (ws, request) => {
         type: "error",
         message: "Invalid JSON message"
       });
+
       return;
     }
 
+    // Join room
     if (data.type === "join") {
       const roomUsers = getRoom(room);
 
@@ -116,6 +141,7 @@ wss.on("connection", (ws, request) => {
       return;
     }
 
+    // WebRTC signaling
     if (data.type === "signal") {
       const target = data.target || null;
       const signalData = data.data || null;
@@ -134,6 +160,7 @@ wss.on("connection", (ws, request) => {
               from: clientId,
               data: signalData
             });
+
             break;
           }
         }
@@ -152,6 +179,7 @@ wss.on("connection", (ws, request) => {
       return;
     }
 
+    // Leave room
     if (data.type === "leave") {
       removeFromRoom(session);
 
@@ -162,6 +190,7 @@ wss.on("connection", (ws, request) => {
       return;
     }
 
+    // Ping
     if (data.type === "ping") {
       send(ws, {
         type: "pong",
@@ -171,6 +200,7 @@ wss.on("connection", (ws, request) => {
       return;
     }
 
+    // Unknown message
     send(ws, {
       type: "error",
       message: "Unknown message type"
@@ -186,6 +216,7 @@ wss.on("connection", (ws, request) => {
   });
 });
 
+// Remove user from room
 function removeFromRoom(session) {
   const roomUsers = rooms.get(session.room);
 
@@ -211,6 +242,7 @@ function removeFromRoom(session) {
   }
 }
 
+// Start server
 const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, "0.0.0.0", () => {
