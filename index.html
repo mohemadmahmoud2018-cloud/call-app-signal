@@ -3,12 +3,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
-
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CALL APP</title>
 
   <style>
@@ -170,7 +165,6 @@
     <div class="videos">
 
       <div class="video-box">
-
         <video
           id="localVideo"
           autoplay
@@ -178,24 +172,17 @@
           playsinline
         ></video>
 
-        <div class="label">
-          You
-        </div>
-
+        <div class="label">You</div>
       </div>
 
       <div class="video-box">
-
         <video
           id="remoteVideo"
           autoplay
           playsinline
         ></video>
 
-        <div class="label">
-          Other person
-        </div>
-
+        <div class="label">Other person</div>
       </div>
 
     </div>
@@ -218,24 +205,15 @@
 
     <div class="controls">
 
-      <button
-        id="cameraBtn"
-        class="secondary"
-      >
+      <button id="cameraBtn" class="secondary">
         Camera
       </button>
 
-      <button
-        id="micBtn"
-        class="secondary"
-      >
+      <button id="micBtn" class="secondary">
         Microphone
       </button>
 
-      <button
-        id="leaveBtn"
-        class="danger"
-      >
+      <button id="leaveBtn" class="danger">
         Leave
       </button>
 
@@ -271,34 +249,34 @@
 
 
     let localStream = null;
-
     let peerConnection = null;
-
     let socket = null;
-
     let clientId = null;
-
     let remoteClientId = null;
-
     let pendingCandidates = [];
 
 
-    // Default STUN configuration.
-    // TURN configuration will be loaded from Render.
+    /*
+     * IMPORTANT:
+     * Metered is used ONLY for TURN.
+     * We do NOT use Metered STUN.
+     *
+     * relay policy forces WebRTC to use
+     * TURN instead of trying direct P2P.
+     */
+
     let rtcConfig = {
+
+      iceTransportPolicy: "relay",
 
       iceServers: [
 
         {
-          urls: "stun:stun.l.google.com:19302"
-        },
-
-        {
-          urls: "stun:stun1.l.google.com:19302"
-        },
-
-        {
-          urls: "stun:stun2.l.google.com:19302"
+          urls: [
+            "turn:global.relay.metered.ca:80?transport=tcp",
+            "turn:global.relay.metered.ca:443",
+            "turns:global.relay.metered.ca:443?transport=tcp"
+          ]
         }
 
       ]
@@ -336,7 +314,6 @@
     }
 
 
-    // Load TURN configuration from Render.
     async function loadTurnConfig() {
 
       if (turnConfigLoaded) {
@@ -372,38 +349,9 @@
 
 
         if (
-          config &&
-          Array.isArray(config.iceServers)
+          !config ||
+          !Array.isArray(config.iceServers)
         ) {
-
-          // Keep Google STUN and add Metered TURN.
-          rtcConfig = {
-
-            iceServers: [
-
-              ...rtcConfig.iceServers,
-
-              ...config.iceServers
-
-            ]
-
-          };
-
-
-          turnConfigLoaded = true;
-
-
-          console.log(
-            "[WEBRTC] TURN configuration loaded"
-          );
-
-
-          console.log(
-            "[WEBRTC] ICE servers:",
-            rtcConfig.iceServers
-          );
-
-        } else {
 
           throw new Error(
             "Invalid TURN configuration"
@@ -411,12 +359,80 @@
 
         }
 
+
+        /*
+         * Filter out Metered STUN.
+         *
+         * We only keep TURN entries.
+         */
+
+        const turnServers =
+          config.iceServers.filter(
+            (server) => {
+
+              const urls =
+                Array.isArray(server.urls)
+                  ? server.urls
+                  : [server.urls];
+
+              return urls.some(
+                (url) =>
+                  url.startsWith("turn:")
+                  ||
+                  url.startsWith("turns:")
+              );
+
+            }
+          );
+
+
+        if (turnServers.length === 0) {
+
+          throw new Error(
+            "No TURN servers found"
+          );
+
+        }
+
+
+        rtcConfig = {
+
+          iceTransportPolicy: "relay",
+
+          iceServers:
+            turnServers
+
+        };
+
+
+        turnConfigLoaded = true;
+
+
+        console.log(
+          "[WEBRTC] TURN configuration loaded"
+        );
+
+
+        console.log(
+          "[WEBRTC] TURN servers:",
+          turnServers
+        );
+
+
       } catch (error) {
 
-        console.warn(
-          "[WEBRTC] TURN configuration unavailable. Using STUN only.",
+        console.error(
+          "[WEBRTC] TURN configuration error:",
           error
         );
+
+
+        setStatus(
+          "TURN configuration failed"
+        );
+
+
+        throw error;
 
       }
 
@@ -484,7 +500,7 @@
 
 
       console.log(
-        "[WEBRTC] Creating peer connection"
+        "[WEBRTC] Creating RELAY peer connection"
       );
 
 
@@ -568,7 +584,8 @@
 
           console.warn(
             "[WEBRTC] ICE candidate error:",
-            event
+            event.errorCode,
+            event.errorText
           );
 
         };
@@ -586,6 +603,33 @@
             state
           );
 
+
+          if (state === "connected") {
+
+            setStatus(
+              "ICE connected"
+            );
+
+          }
+
+
+          if (state === "completed") {
+
+            setStatus(
+              "ICE completed"
+            );
+
+          }
+
+
+          if (state === "failed") {
+
+            setStatus(
+              "ICE connection failed"
+            );
+
+          }
+
         };
 
 
@@ -602,11 +646,6 @@
           );
 
 
-          setStatus(
-            `Connection: ${state}`
-          );
-
-
           if (state === "connected") {
 
             setStatus(
@@ -616,10 +655,28 @@
           }
 
 
+          if (state === "connecting") {
+
+            setStatus(
+              "Connecting video..."
+            );
+
+          }
+
+
           if (state === "failed") {
 
             setStatus(
               "Connection failed"
+            );
+
+          }
+
+
+          if (state === "disconnected") {
+
+            setStatus(
+              "Connection disconnected"
             );
 
           }
@@ -666,10 +723,6 @@
     async function makeOffer() {
 
       if (!remoteClientId) {
-
-        console.warn(
-          "[WEBRTC] No remote client ID yet"
-        );
 
         return;
 
@@ -740,9 +793,20 @@
           pendingCandidates
         ) {
 
-          await pc.addIceCandidate(
-            candidate
-          );
+          try {
+
+            await pc.addIceCandidate(
+              candidate
+            );
+
+          } catch (error) {
+
+            console.warn(
+              "[WEBRTC] Queued ICE candidate error:",
+              error
+            );
+
+          }
 
         }
 
@@ -794,9 +858,20 @@
           pendingCandidates
         ) {
 
-          await pc.addIceCandidate(
-            candidate
-          );
+          try {
+
+            await pc.addIceCandidate(
+              candidate
+            );
+
+          } catch (error) {
+
+            console.warn(
+              "[WEBRTC] Queued ICE candidate error:",
+              error
+            );
+
+          }
 
         }
 
@@ -827,9 +902,20 @@
           pc.remoteDescription.type
         ) {
 
-          await pc.addIceCandidate(
-            candidate
-          );
+          try {
+
+            await pc.addIceCandidate(
+              candidate
+            );
+
+          } catch (error) {
+
+            console.warn(
+              "[WEBRTC] ICE candidate error:",
+              error
+            );
+
+          }
 
         } else {
 
@@ -883,11 +969,8 @@
 
       try {
 
-        // Start camera and microphone.
         await startMedia();
 
-
-        // Load Metered TURN configuration.
         await loadTurnConfig();
 
 
@@ -961,7 +1044,6 @@
                 clientId =
                   message.clientId;
 
-
                 return;
 
               }
@@ -977,30 +1059,6 @@
                   `Joined room • ${message.users} other user(s)`
 
                 );
-
-
-                if (
-                  message.users > 0
-                ) {
-
-                  if (
-                    !peerConnection
-                  ) {
-
-                    createPeerConnection();
-
-                  }
-
-
-                  /*
-                   * The server sends peer_joined
-                   * to the existing participant.
-                   * We wait for the signal message
-                   * to establish the remote client ID.
-                   */
-
-                }
-
 
                 return;
 
@@ -1021,9 +1079,7 @@
                 );
 
 
-                if (
-                  !peerConnection
-                ) {
+                if (!peerConnection) {
 
                   createPeerConnection();
 
@@ -1151,6 +1207,7 @@
 
           };
 
+
       } catch (error) {
 
         console.error(
@@ -1221,7 +1278,7 @@
 
       "click",
 
-      async () => {
+      () => {
 
         if (!localStream) {
           return;
@@ -1254,7 +1311,7 @@
 
       "click",
 
-      async () => {
+      () => {
 
         if (!localStream) {
           return;
