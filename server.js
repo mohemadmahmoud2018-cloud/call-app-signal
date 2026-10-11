@@ -1,15 +1,18 @@
+
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 
 const app = express();
 const server = http.createServer(app);
-
 const wss = new WebSocket.Server({ server });
 
 const rooms = new Map();
 
-// Serve CALL APP frontend
+const ALLOWED_ORIGIN =
+  "https://icy-cell-1947.mohamedmahmoud.workers.dev";
+
+// Serve existing static files, if present.
 app.use(express.static(__dirname));
 
 // Health check
@@ -21,13 +24,35 @@ app.get("/health", (req, res) => {
   });
 });
 
-// TURN configuration for the frontend
+// TURN configuration for the Cloudflare frontend
 app.get("/turn-config", (req, res) => {
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Cache-Control", "no-store");
+
+  const origin = req.headers.origin;
+
+  if (origin !== ALLOWED_ORIGIN) {
+    return res.status(403).json({
+      error: "Origin not allowed"
+    });
+  }
+
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    ALLOWED_ORIGIN
+  );
+
+  const username = process.env.TURN_USERNAME;
+  const credential = process.env.TURN_CREDENTIAL;
+
+  if (!username || !credential) {
+    return res.status(503).json({
+      error: "TURN configuration is missing"
+    });
+  }
+
   res.json({
     iceServers: [
-      {
-        urls: "stun:stun.relay.metered.ca:80"
-      },
       {
         urls: [
           "turn:global.relay.metered.ca:80",
@@ -35,14 +60,14 @@ app.get("/turn-config", (req, res) => {
           "turn:global.relay.metered.ca:443",
           "turns:global.relay.metered.ca:443?transport=tcp"
         ],
-        username: process.env.TURN_USERNAME,
-        credential: process.env.TURN_CREDENTIAL
+        username,
+        credential
       }
     ]
   });
 });
 
-// Get or create room
+// Get or create a room
 function getRoom(roomName) {
   if (!rooms.has(roomName)) {
     rooms.set(roomName, new Set());
@@ -51,19 +76,24 @@ function getRoom(roomName) {
   return rooms.get(roomName);
 }
 
-// Send JSON message
+// Send a JSON message
 function send(ws, data) {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data));
   }
 }
 
-// WebSocket connection
+// WebSocket connections
 wss.on("connection", (ws, request) => {
   const url = new URL(
     request.url,
     `http://${request.headers.host}`
   );
+
+  if (url.pathname !== "/ws") {
+    ws.close(1008, "Invalid WebSocket path");
+    return;
+  }
 
   const room =
     url.searchParams.get("room") || "family";
@@ -74,7 +104,7 @@ wss.on("connection", (ws, request) => {
       message: "Invalid room name"
     });
 
-    ws.close();
+    ws.close(1008, "Invalid room name");
     return;
   }
 
@@ -85,8 +115,7 @@ wss.on("connection", (ws, request) => {
     ws,
     clientId,
     room,
-    joined: false,
-    joinedAt: Date.now()
+    joined: false
   };
 
   ws.session = session;
@@ -107,20 +136,22 @@ wss.on("connection", (ws, request) => {
         type: "error",
         message: "Invalid JSON message"
       });
-
       return;
     }
 
     // Join room
     if (data.type === "join") {
-      const roomUsers = getRoom(room);
+      if (session.joined) {
+        return;
+      }
 
-      session.joined = true;
+      const roomUsers = getRoom(room);
 
       const otherUsers = [...roomUsers].filter(
         (user) => user !== session && user.joined
       );
 
+      session.joined = true;
       roomUsers.add(session);
 
       send(ws, {
@@ -130,6 +161,7 @@ wss.on("connection", (ws, request) => {
         users: otherUsers.length
       });
 
+      // Notify existing users about the new participant.
       for (const other of otherUsers) {
         send(other.ws, {
           type: "peer_joined",
@@ -143,24 +175,34 @@ wss.on("connection", (ws, request) => {
 
     // WebRTC signaling
     if (data.type === "signal") {
-      const target = data.target || null;
-      const signalData = data.data || null;
+      if (!session.joined) {
+        send(ws, {
+          type: "error",
+          message: "Join a room before sending signals"
+        });
+        return;
+      }
 
+      const target = data.target;
+      const signalData = data.data;
       const roomUsers = rooms.get(room);
 
-      if (!roomUsers) {
+      if (!roomUsers || !signalData) {
         return;
       }
 
       if (target) {
         for (const other of roomUsers) {
-          if (other.clientId === target) {
+          if (
+            other.clientId === target &&
+            other.joined &&
+            other !== session
+          ) {
             send(other.ws, {
               type: "signal",
               from: clientId,
               data: signalData
             });
-
             break;
           }
         }
@@ -196,11 +238,9 @@ wss.on("connection", (ws, request) => {
         type: "pong",
         timestamp: Date.now()
       });
-
       return;
     }
 
-    // Unknown message
     send(ws, {
       type: "error",
       message: "Unknown message type"
@@ -216,24 +256,23 @@ wss.on("connection", (ws, request) => {
   });
 });
 
-// Remove user from room
+// Remove a user from a room
 function removeFromRoom(session) {
   const roomUsers = rooms.get(session.room);
 
-  if (!roomUsers) {
+  if (!roomUsers || !roomUsers.has(session)) {
     return;
   }
 
-  if (roomUsers.has(session)) {
-    roomUsers.delete(session);
+  roomUsers.delete(session);
+  session.joined = false;
 
-    for (const other of roomUsers) {
-      if (other.joined) {
-        send(other.ws, {
-          type: "peer_left",
-          clientId: session.clientId
-        });
-      }
+  for (const other of roomUsers) {
+    if (other.joined) {
+      send(other.ws, {
+        type: "peer_left",
+        clientId: session.clientId
+      });
     }
   }
 
